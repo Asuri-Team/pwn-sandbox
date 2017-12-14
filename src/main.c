@@ -30,9 +30,7 @@ int main(int argc, char **argv, char **envp) {
 }
 
 int do_child(char* cmd, char **argv, char **envp) {
-
     ptrace(PTRACE_TRACEME);
-    kill(getpid(), SIGSTOP);
     return execve(cmd, argv, 0);
 }
 
@@ -41,7 +39,7 @@ int wait_for_syscall(pid_t child);
 int do_trace(pid_t child) {
     long status, sys_no, retval;
     waitpid(child, &status, 0);
-    ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_TRACESYSGOOD);
+    ptrace(PTRACE_SETOPTIONS, child, 0, PTRACE_O_EXITKILL);
     while(1) {
         //entrance of syscall
         if (wait_for_syscall(child) != 0) break;
@@ -50,7 +48,7 @@ int do_trace(pid_t child) {
 
         //out of syscall
         if (wait_for_syscall(child) != 0) break;
-        retval = ptrace(PTRACE_PEEKUSER, child, sizeof(long)*RAX);
+        retval = ptrace(PTRACE_PEEKUSER, child, sizeof(long)*ORIG_RAX);
         fprintf(stderr, "%d\n", retval);
     }
     return 0;
@@ -58,12 +56,9 @@ int do_trace(pid_t child) {
 
 int wait_for_syscall(pid_t child) {
     int status;
-    while (1) {
-        ptrace(PTRACE_SYSCALL, child, 0, 0);
-        waitpid(child, &status, 0);
-        if (WIFSTOPPED(status) && WSTOPSIG(status) & 0x80)
-            return 0;
-        if (WIFEXITED(status))
-            return 1;
-    }
+    ptrace(PTRACE_SYSCALL, child, 0, 0);
+    waitpid(child, &status, 0);
+    if (WIFEXITED(status))
+        return 1;
+    return 0;
 }
