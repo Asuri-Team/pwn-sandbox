@@ -8,6 +8,8 @@
 #include <errno.h>
 #include <string.h>
 
+#define PROTECT_BUFSIZE 2048
 char cap_file[1024];
 
-void pwn_protect(pid_t pid, long syscall);
+void pwn_preprotect(pid_t pid, long syscall);
+void pwn_postprotect(pid_t pid, long syscall, long retval);

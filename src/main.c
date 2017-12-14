@@ -44,12 +44,12 @@ int do_trace(pid_t child) {
         //entrance of syscall
         if (wait_for_syscall(child) != 0) break;
         sys_no = ptrace(PTRACE_PEEKUSER, child, sizeof(long)*ORIG_RAX);
-        pwn_protect(child, sys_no);
+        pwn_preprotect(child, sys_no);
 
         //out of syscall
         if (wait_for_syscall(child) != 0) break;
-        retval = ptrace(PTRACE_PEEKUSER, child, sizeof(long)*ORIG_RAX);
-        fprintf(stderr, "%d\n", retval);
+        retval = ptrace(PTRACE_PEEKUSER, child, sizeof(long)*RAX);
+        pwn_postprotect(child, sys_no, retval);
     }
     return 0;
 }
