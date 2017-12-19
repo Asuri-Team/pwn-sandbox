@@ -14,7 +14,7 @@
 
 #include "defs.h"
 
-#define PROTECT_BUFSIZE 2048
+#define PROTECT_BUFSIZE 16384
 char cap_file[512];
 
 void get_arch(pid_t pid);

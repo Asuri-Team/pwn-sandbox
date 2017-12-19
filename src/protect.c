@@ -28,6 +28,8 @@ kernel_ulong_t u_arg[MAX_ARGS];
 uint32_t *const i386_esp_ptr = &i386_regs.esp;
 uint64_t *const x86_64_rsp_ptr = (uint64_t *) &x86_64_regs.rsp;
 char protect_buf[PROTECT_BUFSIZE];
+
+char temp_buf[PROTECT_BUFSIZE];
 const static struct_sysent *syscallent;
 
 static long
@@ -41,10 +43,10 @@ void get_arch(pid_t pid){
     ptrace(PTRACE_GETREGS, pid, NULL, &regs);
     if (regs.cs == 0x33) {
         syscallent = x86_64_sysent;
-        printf("x86_64 program\n");
+        //printf("x86_64 program\n");
     } else if (regs.cs == 0x23) {
         syscallent = x86_sysent;
-        printf("x86 program\n");
+        //printf("x86 program\n");
     }
 }
 
@@ -56,123 +58,188 @@ void save_reg(pid_t pid){
 
 void set_logfile_name(char *filename){
     strcpy(cap_file, filename);
-    fprintf(stderr, "\033[31mcap file: %s\033[0m\n", cap_file);
+    //fprintf(stderr, "\033[31mcap file: %s\033[0m\n", cap_file);
+}
+
+void get_buffer(pid_t pid, char *dst, long addr, long len) {
+    int i, word_len;
+    long t, words, bytes, *p;
+    char *c;
+    if (syscallent == x86_64_sysent) {
+        word_len = 8;
+    } else {
+        word_len = 4;
+    }
+    words = len/word_len;
+    bytes = len%word_len;
+    for(i=0;  i < words; ++i) {
+        t = ptrace(PTRACE_PEEKTEXT, pid, addr + i * word_len, 0);
+        if (syscallent == x86_64_sysent) {
+            *(((unsigned long *)dst) + i) = t; 
+        } else {
+            *(((unsigned int *)dst) + i) = (unsigned int)t; 
+        }
+    }
+    if(bytes > 0){
+        t = ptrace(PTRACE_PEEKTEXT, pid, addr + words * word_len, 0);
+        for(i=0; i<bytes; ++i) {
+            dst[words * word_len + i] = *(((char*)&t)+i);
+        }
+    }
+}
+
+int get_string(pid_t pid, char *dst, long addr){
+    int i, word_len, j, k=0, stop = 0;
+    long t;
+    char *c;
+    if (syscallent == x86_64_sysent) {
+        word_len = 8;
+    } else {
+        word_len = 4;
+    }
+    for(i=0;;++i) {
+        t = ptrace(PTRACE_PEEKTEXT, pid, addr + i * word_len, 0);
+        c = (char*)&t;
+        for (j=0; j<word_len; ++j){
+            if(c[j] != 0) {
+                dst[k] = c[j];
+                ++k;
+            }  else {
+                dst[k] = 0;
+                stop = k;
+            }
+        }
+        if (stop) {
+            break;
+        }
+    }
+    return stop;
 }
 
 /*
  * len = read(fd, buf, max);
  */
-void x64_dump_read(pid_t pid, long syscall, long len) {
+void dump_read(pid_t pid, long syscall, long len) {
     char tmp[128];
-    int fd, i;
-    long t, words, bytes;
+    int fd;
     if(u_arg[0] == 0 || u_arg[0] == 1){
         sprintf(tmp, "%s-std", cap_file);
     } else {
         sprintf(tmp, "%s-%ld", cap_file, u_arg[0]);    
     }
-    words = len/8;
-    bytes = len%8;
     fd = open(tmp, O_WRONLY|O_CREAT|O_APPEND, 0666);
-    if (fd == -1)
-        exit_error("open()", errno);
-    for(i=0; i<len && i < words; ++i) {
-        t = ptrace(PTRACE_PEEKTEXT, pid, u_arg[1] + i * 8, 0);
-        write(fd, &t, 8);
-    }
-    if(bytes > 0){
-        t = ptrace(PTRACE_PEEKTEXT, pid, u_arg[1] + words * 8, 0);
-        write(fd, &t, bytes);
-    }
+    get_buffer(pid, protect_buf, u_arg[1], len);
+    write(fd, protect_buf, len);
     close(fd);
 }
 
 /*
  * len = read(fd, buf, len);
  */
-void x64_dump_write(pid_t pid, long syscall) {
-    int i, fd;
+void dump_write(pid_t pid, long syscall) {
+    int fd;
     char tmp[128];
-    long t, words, bytes;
     if(u_arg[0] == 0 || u_arg[0] == 1){
         sprintf(tmp, "%s-std", cap_file);
     } else {
         sprintf(tmp, "%s-%ld", cap_file, u_arg[0]);    
     }
-    words = u_arg[2]/8;
-    bytes = u_arg[2]%8;
     fd = open(tmp, O_WRONLY|O_CREAT|O_APPEND, 0666);
-    if (fd == -1)
-        exit_error("open()", errno);
-    for(i=0; i < words; ++i) {
-        t = ptrace(PTRACE_PEEKTEXT, pid, u_arg[1] + i * 8, 0);
-        write(fd, &t, 8);
-    }
-    if(bytes > 0){
-        t = ptrace(PTRACE_PEEKTEXT, pid, u_arg[1] + words * 8, 0);
-        write(fd, &t, bytes);
-    }
+    get_buffer(pid, protect_buf, u_arg[1], u_arg[2]);
+    write(fd, protect_buf, u_arg[2]);
     close(fd);
 }
 
 /*
  * stat = execve(path, arg, env);
  */
-void x64_dump_execve(pid_t pid, long syscall) {
-    int i, j, fd;
-    long t;
-    char *a, tmp[128];
+void dump_execve(pid_t pid, long syscall) {
+    int fd;
+    char tmp[128];
     sprintf(tmp, "%s-syscall", cap_file);    
     fd = open(tmp, O_WRONLY|O_CREAT|O_APPEND, 0666);   
-    for(i=0; ; i+=8) {
-        t = ptrace(PTRACE_PEEKTEXT, pid, u_arg[0] + i, 0);
-        a = (char *)&t;
-        for(j=0; j<8; ++j){
-            if(a[j] == 0){
-                write(fd, &t, j);
-            }
-        }
-        write(fd, &t, 8);
-    }
+    get_string(pid, protect_buf, u_arg[0]);
+    sprintf(temp_buf, "execve(%s)\n", protect_buf);
+    write(fd, temp_buf, strlen(temp_buf));
     close(fd);
     kill(pid, SIGKILL);
     exit(-1);
 }
 
-void preprotect_x86_64(pid_t pid, long syscall){
-    switch(syscallent[syscall].sen){
-        case SEN_write:
-            x64_dump_write(pid, syscall);
-            break;
-        case SEN_execve:
-            x64_dump_execve(pid, syscall);
-            break;
-    } 
+void dump_fork(pid_t pid, long syscall) {
+    int fd;
+    char tmp[128];
+    sprintf(tmp, "%s-syscall", cap_file);    
+    fd = open(tmp, O_WRONLY|O_CREAT|O_APPEND, 0666);   
+    sprintf(temp_buf, "fork()");
+    write(fd, temp_buf, strlen(temp_buf));
+    close(fd);
+    kill(pid, SIGKILL);
+    exit(-1);
 }
 
-void preprotect_x86(pid_t pid, long syscall){
-
+void dump_clone(pid_t pid, long syscall) {
+    int fd;
+    char tmp[128];
+    sprintf(tmp, "%s-syscall", cap_file);    
+    fd = open(tmp, O_WRONLY|O_CREAT|O_APPEND, 0666);   
+    sprintf(temp_buf, "clone()\n");
+    write(fd, temp_buf, strlen(temp_buf));
+    close(fd);
+    kill(pid, SIGKILL);
+    exit(-1);
 }
+
+
+/*
+ * fd = open(path, mode, priv);
+ */
+void dump_open(pid_t pid, long syscall) {
+    int fd;
+    char tmp[128];
+    sprintf(tmp, "%s-syscall", cap_file);    
+    fd = open(tmp, O_WRONLY|O_CREAT|O_APPEND, 0666);   
+    get_string(pid, protect_buf, u_arg[0]);
+    sprintf(temp_buf, "open(%s)\n", protect_buf);
+    write(fd, temp_buf, strlen(temp_buf));
+    close(fd);
+    if(!strstr(protect_buf, "/lib") && !strstr(protect_buf, "/etc") && !strstr(protect_buf, "/usr")) {
+        kill(pid, SIGKILL);
+        exit(-1);
+    }
+}
+
 
 void pwn_preprotect(pid_t pid, long syscall) {
     ptrace_getregset(pid);
     get_syscall_args(pid);
-    fprintf(stderr, "\033[31mpre syscall: %s \033[0m\n", syscallent[syscall].sys_name);
-    print_args();
-    if(syscallent == x86_64_sysent){
-        preprotect_x86_64(pid, syscall);
-    } else if(syscallent == x86_sysent) {
-        preprotect_x86(pid, syscall);
-    }
+    //fprintf(stderr, "\033[31mpre syscall: %s \033[0m\n", syscallent[syscall].sys_name);
+    //print_args();
+    switch(syscallent[syscall].sen){
+        case SEN_write:
+            dump_write(pid, syscall);
+            break;
+        case SEN_execve:
+            dump_execve(pid, syscall);
+            break;
+        case SEN_fork:
+            dump_fork(pid, syscall);
+            break;
+        case SEN_clone:
+            dump_clone(pid, syscall);
+            break;
+        case SEN_open:
+            dump_open(pid, syscall);
+    } 
 }
 
 
 
 void pwn_postprotect(pid_t pid, long syscall, long retval) {
-    fprintf(stderr, "\033[31mpost syscall: %s, retval: %ld\033[0m\n", syscallent[syscall].sys_name, retval);
+    //fprintf(stderr, "\033[31mpost syscall: %s, retval: %ld\033[0m\n", syscallent[syscall].sys_name, retval);
     switch(syscallent[syscall].sen){
         case SEN_read:
-            x64_dump_read(pid, syscall, retval);
+            dump_read(pid, syscall, retval);
             break;
     } 
 }
