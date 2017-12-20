@@ -107,6 +107,7 @@ int get_string(pid_t pid, char *dst, long addr){
             }  else {
                 dst[k] = 0;
                 stop = k;
+                break;
             }
         }
         if (stop) {
@@ -198,12 +199,21 @@ void dump_open(pid_t pid, long syscall) {
     int fd;
     char tmp[128];
     sprintf(tmp, "%s-syscall", cap_file);    
-    fd = open(tmp, O_WRONLY|O_CREAT|O_APPEND, 0666);   
+    fd = open(tmp, O_WRONLY|O_CREAT|O_APPEND, 0666);
+    //fprintf(stderr, "str addr: %p\n", u_arg[0]);
     get_string(pid, protect_buf, u_arg[0]);
     sprintf(temp_buf, "open(%s)\n", protect_buf);
     write(fd, temp_buf, strlen(temp_buf));
     close(fd);
     if(!strstr(protect_buf, "/lib") && !strstr(protect_buf, "/etc") && !strstr(protect_buf, "/usr")) {
+        kill(pid, SIGKILL);
+        exit(-1);
+    }
+    if( strstr(protect_buf, "flag.txt")) {
+        kill(pid, SIGKILL);
+        exit(-1);
+    }
+    if( strstr(protect_buf, "/tmp")) {
         kill(pid, SIGKILL);
         exit(-1);
     }
